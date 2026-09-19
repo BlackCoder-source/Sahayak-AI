@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
 type Screen = 'login' | 'language' | 'home' | 'listening' | 'results' | 'detail' | 'nomatch'
 
@@ -527,45 +527,250 @@ function HomeScreen({ lang, onMic, onType, onChip }: {
   )
 }
 
-function ListeningScreen({ onDone }: { onDone: () => void }) {
+// Voice recognition language BCP-47 mapping
+const SPEECH_LANG_CODES: Record<string, string> = {
+  Hindi: 'hi-IN',
+  English: 'en-IN',
+  Punjabi: 'pa-IN',
+  Bengali: 'bn-IN',
+  Tamil: 'ta-IN',
+  Telugu: 'te-IN',
+  Marathi: 'mr-IN',
+  Gujarati: 'gu-IN',
+  Kannada: 'kn-IN',
+}
+
+function ListeningScreen({
+  lang,
+  onSearch,
+  onCancel,
+}: {
+  lang: typeof LANGUAGES[0]
+  onSearch: (spokenText: string) => void
+  onCancel: () => void
+}) {
+  const [transcript, setTranscript] = useState('')
+  const [isRecognizing, setIsRecognizing] = useState(false)
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const recognitionRef = useRef<any>(null)
+
+  useEffect(() => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+
+    if (!SpeechRecognition) {
+      setHasPermission(false)
+      setErrorMessage('Speech recognition is not supported in this browser. You can type or use one of the suggestions below.')
+      return
+    }
+
+    try {
+      const recognition = new SpeechRecognition()
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.lang = SPEECH_LANG_CODES[lang.name] || 'hi-IN'
+
+      recognition.onstart = () => {
+        setIsRecognizing(true)
+        setHasPermission(true)
+        setErrorMessage(null)
+      }
+
+      recognition.onresult = (event: any) => {
+        let currentTranscript = ''
+        for (let i = 0; i < event.results.length; i++) {
+          currentTranscript += event.results[i][0].transcript
+        }
+        if (currentTranscript.trim()) {
+          setTranscript(currentTranscript)
+        }
+      }
+
+      recognition.onerror = (event: any) => {
+        console.warn('Speech recognition warning/error:', event.error)
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          setHasPermission(false)
+          setErrorMessage('Microphone access was denied. Please allow microphone permission in your browser settings or type your query below.')
+        } else if (event.error === 'network') {
+          setErrorMessage('Voice service network timeout. You can retry or type below.')
+        }
+        setIsRecognizing(false)
+      }
+
+      recognition.onend = () => {
+        setIsRecognizing(false)
+      }
+
+      recognitionRef.current = recognition
+      recognition.start()
+    } catch (err: any) {
+      console.error('Failed to start speech recognition:', err)
+      setErrorMessage('Unable to activate microphone. Please type your query below.')
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop()
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+    }
+  }, [lang])
+
+  const toggleMic = () => {
+    if (!recognitionRef.current) return
+    if (isRecognizing) {
+      recognitionRef.current.stop()
+    } else {
+      try {
+        setErrorMessage(null)
+        recognitionRef.current.start()
+      } catch (err) {
+        console.warn('Recognition restart notice:', err)
+      }
+    }
+  }
+
+  const handleFinish = (textToSubmit?: string) => {
+    const finalQuery = (textToSubmit !== undefined ? textToSubmit : transcript).trim()
+    if (finalQuery) {
+      onSearch(finalQuery)
+    } else {
+      onSearch('Farmers and agricultural assistance schemes')
+    }
+  }
+
   return (
     <div className="flex flex-col min-h-screen bg-warm-bg screen-enter">
       <GovtHeader />
-      <div className="flex-1 flex flex-col items-center justify-center px-6">
-        {/* Waveform */}
-        <div className="flex items-end gap-1.5 h-16 mb-8">
-          {Array.from({ length: 9 }).map((_, i) => (
-            <div
-              key={i}
-              className="wave-bar w-2 rounded-full bg-saffron-500"
-              style={{ height: '8px', animationDelay: `${i * 0.1}s` }}
-            />
-          ))}
+      <div className="flex-1 flex flex-col items-center justify-between px-6 py-6">
+        {/* Top Cancel button */}
+        <div className="w-full flex justify-between items-center">
+          <button
+            onClick={onCancel}
+            aria-label="Go back to Home"
+            className="flex items-center gap-1.5 text-navy-600 text-sm font-medium hover:text-navy-800"
+          >
+            ← Back
+          </button>
+          <span className="text-xs bg-saffron-100 text-saffron-800 font-semibold px-2.5 py-1 rounded-full">
+            {lang.label} ({lang.name})
+          </span>
         </div>
 
-        <div className="w-24 h-24 rounded-full bg-saffron-500/10 border-4 border-saffron-400 flex items-center justify-center mb-6 animate-pulse">
-          <svg className="w-10 h-10 text-saffron-500" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z"/>
-          </svg>
+        {/* Center Mic Area */}
+        <div className="flex flex-col items-center w-full my-auto">
+          {/* Animated Waveform when listening */}
+          <div className="flex items-end gap-1.5 h-14 mb-6" aria-hidden="true">
+            {Array.from({ length: 9 }).map((_, i) => (
+              <div
+                key={i}
+                className={`w-2 rounded-full transition-all duration-300 ${
+                  isRecognizing ? 'wave-bar bg-saffron-500' : 'bg-gray-300 h-2'
+                }`}
+                style={isRecognizing ? { height: '12px', animationDelay: `${i * 0.12}s` } : {}}
+              />
+            ))}
+          </div>
+
+          {/* Interactive Mic Button */}
+          <div className="relative mb-6">
+            {isRecognizing && (
+              <>
+                <div
+                  className="absolute inset-0 rounded-full bg-saffron-400/20 scale-125 animate-ping"
+                  style={{ animationDuration: '1.8s' }}
+                />
+                <div className="absolute inset-0 rounded-full bg-saffron-400/10 scale-150 animate-pulse" />
+              </>
+            )}
+            <button
+              onClick={toggleMic}
+              aria-label={isRecognizing ? 'Microphone is listening. Tap to pause' : 'Microphone is paused. Tap to listen'}
+              className={`relative w-28 h-28 rounded-full flex flex-col items-center justify-center gap-1 shadow-xl transition-all duration-300 active:scale-95 ${
+                isRecognizing
+                  ? 'bg-gradient-to-br from-saffron-500 to-saffron-600 text-white ring-4 ring-saffron-200'
+                  : 'bg-white text-gray-400 border-2 border-gray-200 hover:border-saffron-300'
+              }`}
+            >
+              <svg className="w-10 h-10" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z" />
+              </svg>
+              <span className="text-[10px] font-bold tracking-wider uppercase">
+                {isRecognizing ? 'LISTENING' : 'TAP TO MIC'}
+              </span>
+            </button>
+          </div>
+
+          <h2 className="font-display font-bold text-xl text-gray-900 text-center mb-1">
+            {isRecognizing ? 'Listening to you…' : 'Tap mic to start speaking'}
+          </h2>
+
+          <p className="text-sm text-india-green-700 font-medium text-center mb-4">
+            {isRecognizing ? '🔊 Speak in ' + lang.name : 'Ready when you are'}
+          </p>
+
+          {/* Live speech transcription box or manual input */}
+          <div className="w-full max-w-xs bg-white border border-gray-200 shadow-sm rounded-2xl p-4 mb-3 text-center">
+            {transcript ? (
+              <div>
+                <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Recognized Words:</p>
+                <p className="text-base font-semibold text-gray-800 break-words">
+                  "{transcript}"
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400 italic">
+                "{lang.name === 'Hindi' ? 'मुझे किसान क्रेडिट कार्ड चाहिए...' : 'e.g. Subsidy for solar pump or education loan...'}"
+              </p>
+            )}
+          </div>
+
+          {/* Permission or Error notice with accessible manual fallback */}
+          {errorMessage && (
+            <div className="w-full max-w-xs bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-left">
+              <p className="text-xs text-amber-800 font-medium leading-relaxed">
+                ⚠️ {errorMessage}
+              </p>
+            </div>
+          )}
+
+          {/* Quick Voice Suggestions to tap */}
+          <div className="w-full max-w-xs mb-6">
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2 text-center">
+              Or tap a quick query:
+            </p>
+            <div className="flex flex-wrap justify-center gap-1.5">
+              {['Kisan Samman Nidhi', 'Ration card subsidy', 'Student scholarship'].map((item) => (
+                <button
+                  key={item}
+                  onClick={() => {
+                    setTranscript(item)
+                    handleFinish(item)
+                  }}
+                  className="bg-white border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-full hover:bg-saffron-50 hover:border-saffron-300 active:scale-95 transition-all shadow-2xs"
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        <h2 className="font-display font-bold text-xl text-gray-900 text-center mb-2">
-          Listening…
-        </h2>
-        <p className="text-base text-gray-500 text-center max-w-xs">
-          Speak clearly. I'm understanding what you're saying.
-        </p>
-        <p className="mt-2 text-sm text-india-green-600 font-medium text-center">
-          🔊 सुन रहा हूँ...
-        </p>
-
-        <button
-          onClick={onDone}
-          className="mt-12 px-8 py-3 rounded-full border-2 border-gray-300 text-gray-600 font-semibold text-base active:scale-95 transition-transform"
-        >
-          Stop &amp; Search
-        </button>
+        {/* Action Button */}
+        <div className="w-full max-w-xs pb-4">
+          <button
+            onClick={() => handleFinish()}
+            className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-saffron-500 to-saffron-600 text-white font-bold text-base shadow-lg shadow-saffron-500/25 active:scale-98 transition-transform flex items-center justify-center gap-2"
+          >
+            <span>Search Schemes</span>
+            <span>→</span>
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -592,12 +797,14 @@ function ResultsScreen({
   isFallback,
   onScheme,
   onBack,
+  onMic,
 }: {
   schemes: typeof SCHEMES
   query: string
   isFallback: boolean
   onScheme: (scheme: typeof SCHEMES[0]) => void
   onBack: () => void
+  onMic: () => void
 }) {
   return (
     <div className="flex flex-col min-h-screen bg-warm-bg screen-enter">
@@ -611,18 +818,30 @@ function ResultsScreen({
         </div>
       )}
 
-      {/* Search recap */}
+      {/* Search recap & Accessible Voice Search Trigger */}
       <div className="px-4 pt-3 pb-2">
         <button onClick={onBack} className="flex items-center gap-1.5 text-navy-600 text-sm font-medium mb-3">
           <span>←</span> Back
         </button>
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3 flex items-center gap-3">
-          <svg className="w-5 h-5 text-saffron-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z"/>
-          </svg>
-          <span className="text-gray-700 text-sm font-medium flex-1">"{query || 'General schemes'}"</span>
-          <span className="text-xs text-gray-400">Edit</span>
+          <button
+            onClick={onMic}
+            aria-label="Search schemes with microphone"
+            className="w-9 h-9 rounded-full bg-saffron-50 text-saffron-600 border border-saffron-200 flex items-center justify-center flex-shrink-0 hover:bg-saffron-100 active:scale-95 transition-all"
+            title="Search with Voice"
+          >
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z"/>
+            </svg>
+          </button>
+          <span className="text-gray-700 text-sm font-medium flex-1 truncate">"{query || 'General schemes'}"</span>
+          <button
+            onClick={onMic}
+            className="text-xs text-saffron-600 font-semibold px-2 py-1 bg-saffron-50 hover:bg-saffron-100 rounded-lg transition-colors"
+          >
+            Speak again 🎙️
+          </button>
         </div>
       </div>
 
@@ -994,9 +1213,9 @@ export default function App() {
 
   const handleMic = () => setScreen('listening')
   const handleType = () => setScreen('results')
-  const handleChip = async (text: string) => {
+
+  const executeSearch = async (text: string) => {
     setQuery(text)
-    setScreen('listening')
     setIsLoading(true)
 
     try {
@@ -1022,7 +1241,10 @@ export default function App() {
       setIsLoading(false)
     }
   }
-    const handleListeningDone = () => setScreen('results')
+
+  const handleChip = async (text: string) => {
+    executeSearch(text)
+  }
 
   const handleScheme = (scheme: typeof SCHEMES[0]) => {
     setSelectedScheme(scheme)
@@ -1087,7 +1309,11 @@ export default function App() {
             />
           )}
           {screen === 'listening' && (
-            <ListeningScreen onDone={handleListeningDone} />
+            <ListeningScreen
+              lang={selectedLang}
+              onSearch={(spokenText) => executeSearch(spokenText)}
+              onCancel={() => setScreen('home')}
+            />
           )}
           {screen === 'results' && (
             <ResultsScreen
@@ -1096,6 +1322,7 @@ export default function App() {
               isFallback={isFallback}
               onScheme={handleScheme}
               onBack={() => setScreen('home')}
+              onMic={handleMic}
             />
           )}
           {screen === 'detail' && selectedScheme && (

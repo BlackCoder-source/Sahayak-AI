@@ -1000,7 +1000,8 @@ export default function App() {
     setIsLoading(true)
 
     try {
-      const response = await fetch('http://localhost:3000/api/schemes/search', {
+      const apiBase = import.meta.env.VITE_API_BASE_URL || ''
+      const response = await fetch(`${apiBase}/api/schemes/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, lang: selectedLang.name })
